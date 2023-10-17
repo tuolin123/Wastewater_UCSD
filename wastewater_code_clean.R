@@ -1,3 +1,4 @@
+setwd("/Users/tuo/Dropbox/biostats/Waste water project")
 options(repos='http://cran.rstudio.org')
 have.packages <- installed.packages()
 cran.packages <- c('devtools','plotrix','randomForest','tree')
@@ -27,18 +28,22 @@ library(hrbrthemes)
 library(viridis)
 library(data.table)
 library(cowplot)
+library(glmnet)
+library(e1071)
+library(nnet)
 
 source("confusion_matrix.R")
 
 # Manhole lookup data
-manhole_notif = read_csv("manhole_notification.csv") %>%
+manhole_notif = read_csv("waste water Junting/data/manhole_notification.csv") %>%
   filter(!duplicated(building_name)) %>%
   janitor::clean_names()
 
 ## testing on the new dataset
-colnames <- as.vector(xlsx::read.xlsx("Wastewater sample pickup-111.xlsx", 
-                                      sheetIndex = 4, header = T, rowIndex = 2:3))
-ww_char_new <- read_excel("Wastewater sample pickup-111.xlsx", sheet = "Results_for_test",
+colnames <- read_excel("validation data/Wastewater sample pickup-111.xlsx", sheet = "Results_for_test", cell_rows(2:3))
+colnames <- as.vector(t(colnames))
+
+ww_char_new <- read_excel("validation data/Wastewater sample pickup-111.xlsx", sheet = "Results_for_test",
                           range = cell_limits(c(3,1), c(147,359)))
 
 oldnames = colnames(ww_char_new)
@@ -58,12 +63,12 @@ ww_char_new1 <- ww_char_new %>%
   mutate(ww_results = ifelse(ww_results %in% c(-2), NA, ww_results)) %>%
   mutate(ww_results = abs(ww_results)) 
 
-dat_list = read_csv("Building Result Data Historical 2021-11-16.csv") %>%
+dat_list = read_csv("validation data/Building Result Data Historical 2021-11-16.csv") %>%
   dplyr::rename(date = RESULT_DATE) %>%
   mutate(date = as.POSIXct(date, format = "%m/%d/%y",origin = "1970-01-01 00:00:00",tz = "UTC")) %>%
   janitor::clean_names()
 
-isolation = read_csv("ResidentsIsolationQuarantineOnCampus 2020nov23 through 2021Nov16.csv") %>% 
+isolation = read_csv("validation data/ResidentsIsolationQuarantineOnCampus 2020nov23 through 2021Nov16.csv") %>% 
   dplyr::rename(start = `Date Entered`) %>%
   dplyr::rename(end = `Student Released Date`) %>%
   dplyr::rename(building_name = `Building`) %>%
@@ -75,7 +80,6 @@ isolation = read_csv("ResidentsIsolationQuarantineOnCampus 2020nov23 through 202
   left_join(manhole_notif, by = "building_name") %>%
   filter(!is.na(manhole_id))
 
-## combine the data
 data_full = dat_list %>% 
   left_join( manhole_notif,by = "building_name") %>%
   filter(!is.na(manhole_id)) %>% 
@@ -138,8 +142,6 @@ for(i in 1:nrow(isolation)){
                                   date >= isolation$start[i], 1, test_result))
 }
 
-#data_full = data_full %>% mutate(test_result = as.factor(test_result))
-
 ## training
 data_train = data_full %>%
   filter(date <= "2021-04-30")
@@ -162,20 +164,6 @@ split.fun <- function(x, labs, digits, varlen, faclen)
   labs <- gsub("ww_1out5 = 0", "\"+\" < 1 in last 5 days", labs)
   labs <- gsub("ww_2out7 = 0", "\"+\" < 2 in last 7 days", labs)
   labs <- gsub("ww_bf1_t = 1", "previous day \"+\"", labs)
-  # labs <- gsub("ww_3out5 = 0", "\"+\" < 3 in last 5 days", labs)
-  # labs <- gsub("ww_bf5_t = 0", "5 days before \"-\"", labs)
-  # labs <- gsub("ww_1out3 = 0", "\"+\" < 1 in last 3 days", labs)
-  # labs <- gsub("consec3 = 0", "consecutive 3 days before not all \"+\"", labs)
-  # labs <- gsub("ww_3out4 = 1", "\"+\" >= 3 in last 4 days", labs)
-  # labs <- gsub("ww_bf2_t = 1", "2 days before \"+\"", labs)
-  # labs <- gsub("ww_bf4_t = 0", "4 days before \"-\"", labs)
-  # labs <- gsub("ww_bf3_t = 1", "3 days before \"+\"", labs)
-  # labs <- gsub("ww_2out7 = 1", "\"+\" >= 2 in last 7 days", labs)
-  # labs <- gsub("ww_bf1_t = 0", "previous day \"-\"", labs)
-  # labs <- gsub("ww_1out4 = 1", "\"+\" >= 1 in last 4 days", labs)
-  # labs <- gsub("ww_2out5 = 0", "\"+\" < 2 in last 5 days", labs)
-  # labs <- gsub("ww_bf4_t = 1", "4 days before \"+\"", labs)
-  # labs <- gsub("ww_bf5_t = 1", "5 days before \"+\"", labs)
   labs }
 prp(fit_full,
     type = 1,                # left and right split labels (see Figure 2)
@@ -210,7 +198,6 @@ for(j in 1:length(cpp)){
                      control = rpart.control(cp = cpp[j]))
     yhat = as.numeric(as.character(predict(fit_full, newdata = data_cv_valid, type = "c")))
     pred[i] = sum(data_cv_valid$weight*(yhat == data_cv_valid$test_result))/sum(data_cv_valid$weight)
-    #pred[i] = weighted_confusion_matrix(data_cv_valid$test_result, yhat, data_cv_valid$weight)[1,1]
   }
   pred_cv[j] = mean(pred[pred != 0])
 }
@@ -266,8 +253,6 @@ for(i in 1:length(w)){
                    data = data_train, weight = weight1,
                    control = rpart.control(cp = 0.02))
   var_imp[[i]] = fit_full$variable.importance
-  #plotcp(fit_full)
-  #rpart.plot(fit_full)
   yhat = as.numeric(as.character(predict(fit_full, type = "c")))
   sum(data_train$weight1*(yhat == data_train$test_result))/sum(data_train$weight1)
   TPR = weighted_confusion_matrix(data_train$test_result, yhat, data_train$weight1)[1,1]/
@@ -297,6 +282,12 @@ p
 ## validation
 data_valid = data_full %>%
   filter(date >= "2021-06-30" )
+
+# data_valid = data_full %>%
+#   filter(date > "2021-04-10")
+
+# data_valid = data_full %>%
+#   filter(date <= "2021-08-20" & date > "2021-06-20")
 
 n_neg = sum(data_valid$test_result == 0)
 n_pos = sum(data_valid$test_result == 1)
@@ -359,8 +350,6 @@ for(i in 1:length(w)){
                    data = data_train, weight = weight1,
                    control = rpart.control(cp = 0.02))
   var_imp[[i]] = fit_full$variable.importance
-  #plotcp(fit_full)
-  #rpart.plot(fit_full)
   yhat = as.numeric(as.character(predict(fit_full, newdata = data_valid, type = "c")))
   wcm = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)
   ss[i,] = c(wcm[1,1], wcm[2,1])
@@ -413,6 +402,8 @@ ss1 = matrix(rep(0,2*7), ncol = 2) ## sensitivity & specificity
 ss2 = matrix(rep(0,2*7), ncol = 2) ## sensitivity & specificity
 
 for(i in 1:length(w)){
+  n_neg = sum(data_train$test_result == 0)
+  n_pos = sum(data_train$test_result == 1)
   data_train$weight = ifelse(data_train$test_result == 0, 1/n_neg, w[i]*1/n_pos)
   rf_fit = randomForest(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf +
                           ww_bf5_tf + ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + 
@@ -423,6 +414,8 @@ for(i in 1:length(w)){
                      ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf,
                    data = data_train, weight = weight,
                    control = rpart.control(cp = 0.02))
+  n_neg = sum(data_valid$test_result == 0)
+  n_pos = sum(data_valid$test_result == 1)
   data_valid$weight = ifelse(data_valid$test_result == 0, 1/n_neg, w[i]*1/n_pos)
   yhat1 = as.numeric(as.character(predict(rf_fit, newdata = data_valid, type = "c")))
   yhat2 = as.numeric(as.character(predict(fit_full, newdata = data_valid, type = "c")))
@@ -440,13 +433,13 @@ for(i in 1:length(w)){
 ss1 = data.frame(ss1); ss2 = data.frame(ss2)
 colnames(ss1) = c("TPR", "FPR"); colnames(ss2) = c("TPR", "FPR")
 ss1$color = as.factor(c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
-                        "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1"))
+                       "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1"))
 levels(ss1$color) = c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
-                      "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1")
+                     "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1")
 ss2$color = as.factor(c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
                         "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1"))
 levels(ss2$color) = c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
-                      "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1")
+                     "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1")
 
 p = ggplot(data = ss1, aes(x = FPR, y = TPR)) +
   geom_point(aes(color = color), data = ss1) +
@@ -465,7 +458,7 @@ set.seed(2021)
 rf_fit = randomForest(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf +
                         ww_bf5_tf + ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + 
                         ww_3out4_tf, classwt = c(1,3), data = data_train,
-                      ntree=1000, do.trace=100)
+               ntree=1000, do.trace=100)
 
 yhat = as.numeric(as.character(predict(rf_fit, type = "c")))
 data_train$weight = ifelse(data_train$test_result == 0, 1/n_neg, 3*1/n_pos)
@@ -480,18 +473,64 @@ data_valid$weight = ifelse(data_valid$test_result == 0, 1/n_neg, 3*1/n_pos)
 sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
 
 ## logistic regression
-fit = glm(factor(test_result) ~ ww_3out7_tf + ww_1out5_tf, weight = weight, data = data_train, family = "binomial")
+fit = glm(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+            ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+            ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf, weight = weight, data = data_train, family = "binomial")
 yhat = as.numeric(as.character(predict(fit, type = "response"))>0.5)
 sum(data_train$weight*(yhat == data_train$test_result))/sum(data_train$weight)
 weighted_confusion_matrix(data_train$test_result, yhat, data_train$weight)
 
-XX = model.matrix(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf , data = data_train)
-cv.lasso <- cv.glmnet(XX[,-1], data_train$test_result, family = 'binomial',
+yhat = as.numeric(as.character(predict.glm(fit, newdata = data_valid, type = "response"))>0.5)
+sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)
+
+XX = model.matrix(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+                    ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+                    ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf, data = data_train)
+cv.lasso <- cv.glmnet(XX[,-1], data_train$test_result, family = 'binomial', weights = data_train$weight,
                       type.measure = "class")
 c = coef(cv.lasso, cv.lasso$lambda.1se) #set a bigger log(lambda)
 inds = which(c!=0)
-snps <- row.names(c)[inds][-1]
+row.names(c)[inds][-1]
 
+fit = glm(factor(test_result) ~ ww_3out7_tf + ww_1out5_tf + ww_1out3_tf,
+          weight = weight, data = data_train, family = "binomial")
+yhat = as.numeric(as.character(predict(fit, type = "response"))>0.5)
+sum(data_train$weight*(yhat == data_train$test_result))/sum(data_train$weight)
+weighted_confusion_matrix(data_train$test_result, yhat, data_train$weight)
+
+yhat = as.numeric(as.character(predict.glm(fit, newdata = data_valid, type = "response"))>0.5)
+sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)
+
+## SVM
+wts = 1/table(data_train$test_result)
+wts[2] = 2*wts[2]
+svm_model <- svm(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+                   ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+                   ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf, 
+                   data = data_train, type="C-classification", kernel="linear",
+                 class.weights = wts)
+yhat = predict(svm_model, data_train)
+sum(data_train$weight*(yhat == data_train$test_result))/sum(data_train$weight)
+weighted_confusion_matrix(data_train$test_result, yhat, data_train$weight)
+
+yhat = predict(svm_model, data_valid)
+sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)
+
+## Neural Network
+nn_model = nnet(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+                  ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+                  ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf, 
+                data = data_train, weights = data_train$weight, size = 10)
+yhat = as.numeric(predict(nn_model, data_train) > 0.5)
+sum(data_train$weight*(yhat == data_train$test_result))/sum(data_train$weight)
+weighted_confusion_matrix(data_train$test_result, yhat, data_train$weight)
+
+yhat = as.numeric(predict(nn_model, data_valid) > 0.5)
+sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)
 
 ## NPV PPV calculation
 p = rep(0, 7)
@@ -503,6 +542,7 @@ for(i in 1:7){
   p[i] = total_pos/total
 }
 phat = mean(p)
+
 
 ## Read-in the data matched the building name
 occupant = read.csv("draft/PPV_NPV/occupant.csv")
@@ -585,3 +625,313 @@ ggplot(data_train_agg, aes(x=test_total, y=pos_total)) +
 ggplot(data_train_agg_nonzero, aes(x=test_total, y=pos_total)) + 
   geom_point()+
   stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1)
+
+
+## More analysis for paper revision
+# Impact of vaccination
+## training
+data_train = data_full %>%
+  filter(date < "2020-12-15")
+n_neg = sum(data_train$test_result == 0)
+n_pos = sum(data_train$test_result == 1)
+data_train$weight = ifelse(data_train$test_result == 0, 1/n_neg, 2*1/n_pos)
+fit_full = rpart(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+                   ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+                   ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf,
+                 data = data_train, weight = weight,
+                 control = rpart.control(cp = 0.02))
+
+plotcp(fit_full)
+rpart.plot(fit_full)
+
+yhat = as.numeric(as.character(predict(fit_full, type = "c")))
+sum(data_train$weight*(yhat == data_train$test_result))/sum(data_train$weight)
+(w = weighted_confusion_matrix(data_train$test_result, yhat, data_train$weight))
+table(data_train$test_result, yhat)
+
+data_valid = data_full %>%
+  filter(date >= "2021-06-30" )
+
+n_neg = sum(data_valid$test_result == 0)
+n_pos = sum(data_valid$test_result == 1)
+data_valid$weight = ifelse(data_valid$test_result == 0, 1/n_neg, 2*1/n_pos)
+fit_valid = rpart(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+                    ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+                    ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf,
+                  data = data_valid, weight = weight,
+                  control = rpart.control(cp = 0.02))
+plotcp(fit_valid)
+rpart.plot(fit_valid)
+
+## test training model on validation set
+yhat = as.numeric(as.character(predict(fit_full, newdata = data_valid, type = "c")))
+sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)
+
+## sampling the data
+data_train = data_full %>%
+  filter(date <= "2021-04-30")
+min_date = min(data_train$date)
+max_date = max(data_train$date)
+#sampled_date <- seq(min_date, max_date, by = "3 days")
+sampled_date <- seq(min_date, max_date, by = "2 days")
+sampled_dat_train <- data_train %>%
+  mutate(date = as.Date(date)) %>%
+  filter(date %in% as.Date(sampled_date))
+
+n_neg = sum(sampled_dat_train$test_result == 0)
+n_pos = sum(sampled_dat_train$test_result == 1)
+sampled_dat_train$weight = ifelse(sampled_dat_train$test_result == 0, 1/n_neg, 2*1/n_pos)
+sampled_dat_train = sampled_dat_train %>% 
+  mutate(ww_2out4_tf = ifelse(ww_bf2_tf+ww_bf4_tf == 2, 1, 0)) %>%
+  mutate(ww_3out6_tf = ifelse(ww_bf2_tf+ww_bf4_tf+ww_bf6_tf == 3, 1, 0))
+fit_full = rpart(factor(test_result) ~ ww_bf2_tf + ww_bf4_tf + ww_bf6_tf +
+                   ww_2out4_tf + ww_3out6_tf,
+                 data = sampled_dat_train, weight = weight,
+                 control = rpart.control(cp = 0.02))
+
+plotcp(fit_full)
+rpart.plot(fit_full)
+
+yhat = as.numeric(as.character(predict(fit_full, type = "c")))
+sum(sampled_dat_train$weight*(yhat == sampled_dat_train$test_result))/sum(sampled_dat_train$weight)
+(w = weighted_confusion_matrix(sampled_dat_train$test_result, yhat, sampled_dat_train$weight))
+table(sampled_dat_train$test_result, yhat)
+
+data_valid = data_full %>%
+  filter(date >= "2021-06-30" )
+min_date = min(data_valid$date)
+max_date = max(data_valid$date)
+#sampled_date <- seq(min_date, max_date, by = "3 days")
+sampled_date <- seq(min_date, max_date, by = "2 days")
+sampled_dat_valid <- data_valid %>%
+  mutate(date = as.Date(date)) %>%
+  filter(date %in% as.Date(sampled_date))
+sampled_dat_valid <- sampled_dat_valid %>%
+  mutate(ww_2out4_tf = ifelse(ww_bf2_tf+ww_bf4_tf == 2, 1, 0)) %>%
+  mutate(ww_3out6_tf = ifelse(ww_bf2_tf+ww_bf4_tf+ww_bf6_tf == 3, 1, 0))
+
+n_neg = sum(sampled_dat_valid$test_result == 0)
+n_pos = sum(sampled_dat_valid$test_result == 1)
+sampled_dat_valid$weight = ifelse(sampled_dat_valid$test_result == 0, 1/n_neg, 2*1/n_pos)
+
+yhat = as.numeric(as.character(predict(fit_full, newdata = sampled_dat_valid, type = "c")))
+sum(sampled_dat_valid$weight*(yhat == sampled_dat_valid$test_result))/sum(sampled_dat_valid$weight)
+weighted_confusion_matrix(sampled_dat_valid$test_result, yhat, sampled_dat_valid$weight)
+
+## adjust the weight and draw the ROC curve for all other methods
+ss = matrix(rep(0,2*7), ncol = 2) ## sensitivity & specificity
+var_imp = list()
+
+w = c(0.2, 0.5, 1, 1.5, 2, 3, 4)
+data_train = data_full %>%
+  filter(date <= "2021-04-30")
+
+data_valid = data_full %>%
+  filter(date >= "2021-06-30" )
+
+# classification tree
+ss = matrix(rep(0,2*7), ncol = 2) ## sensitivity & specificity
+ac = rep(0,7)
+var_imp = list()
+
+w = c(0.2, 0.5, 1, 1.5, 2, 3, 4)
+
+for(i in 1:length(w)){
+  n_neg = sum(data_train$test_result == 0)
+  n_pos = sum(data_train$test_result == 1)
+  data_train$weight1 = ifelse(data_train$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  fit_full = rpart(as.factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+                     ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+                     ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf,
+                   data = data_train, weight = weight1,
+                   control = rpart.control(cp = 0.02))
+  var_imp[[i]] = fit_full$variable.importance
+  n_neg = sum(data_valid$test_result == 0)
+  n_pos = sum(data_valid$test_result == 1)
+  data_valid$weight = ifelse(data_valid$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  yhat = as.numeric(as.character(predict(fit_full, newdata = data_valid, type = "c")))
+  TPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,])
+  FPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,])
+  ss[i,] = c(TPR, FPR)
+  ac[i] = sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+}
+
+ss = data.frame(ss)
+colnames(ss) = c("TPR", "FPR")
+ss$color = as.factor(c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
+                       "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1"))
+levels(ss$color) = c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
+                     "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1")
+
+# logistic regression
+ss1 = matrix(rep(0,2*7), ncol = 2) ## sensitivity & specificity
+ac1 = rep(0,7)
+for(i in 1:length(w)){
+  n_neg = sum(data_train$test_result == 0)
+  n_pos = sum(data_train$test_result == 1)
+  data_train$weight = ifelse(data_train$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  fit = glm(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+              ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+              ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf,
+            weight = weight, data = data_train, family = "binomial")
+
+  n_neg = sum(data_valid$test_result == 0)
+  n_pos = sum(data_valid$test_result == 1)
+  data_valid$weight = ifelse(data_valid$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  yhat = as.numeric(as.character(predict(fit, newdata = data_valid, type = "response"))>0.5)
+  
+  TPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,])
+  FPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,])
+  ss1[i,] = c(TPR, FPR)
+  ac1[i] = sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+}
+
+ss1 = data.frame(ss1)
+colnames(ss1) = c("TPR", "FPR")
+ss1$color = as.factor(c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
+                       "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1"))
+
+# logistic regression with LASSO
+ss2 = matrix(rep(0,2*7), ncol = 2)
+ac2 = rep(0,7)
+for(i in 1:length(w)){
+  n_neg = sum(data_train$test_result == 0)
+  n_pos = sum(data_train$test_result == 1)
+  
+  data_train$weight = ifelse(data_train$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  XX = model.matrix(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+                      ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+                      ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf, data = data_train)
+  cv.lasso <- cv.glmnet(XX[,-1], data_train$test_result, family = 'binomial', weights = data_train$weight,
+                        type.measure = "class")
+  c = coef(cv.lasso, cv.lasso$lambda.1se) #set a bigger log(lambda)
+  inds = which(c!=0)
+  
+  if(length(inds) == 1){
+    fml = as.formula(paste("factor(test_result) ~ ", 1))
+  }else{
+  fml = as.formula(paste("factor(test_result) ~ ", paste(row.names(c)[inds][-1], collapse = "+")))}
+  
+  fit = glm(fml, weight = weight, data = data_train, family = "binomial")
+  
+  n_neg = sum(data_valid$test_result == 0)
+  n_pos = sum(data_valid$test_result == 1)
+  data_valid$weight = ifelse(data_valid$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  yhat = as.numeric(as.character(predict(fit, newdata = data_valid, type = "response"))>0.5)
+  
+  TPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,])
+  FPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,])
+  ss2[i,] = c(TPR, FPR)
+  ac2[i] = sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+}
+
+ss2 = data.frame(ss2)
+colnames(ss2) = c("TPR", "FPR")
+ss2$color = as.factor(c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
+                       "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1"))
+
+# SVM
+ss3 = matrix(rep(0,2*7), ncol = 2)
+ac3 = rep(0,7)
+for(i in 1:length(w)){
+  n_neg = sum(data_train$test_result == 0)
+  n_pos = sum(data_train$test_result == 1)
+  
+  data_train$weight = ifelse(data_train$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  wts = 1/table(data_train$test_result)
+  wts[2] = w[i]*wts[2]
+  svm_model <- svm(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+                     ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+                     ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf, 
+                   data = data_train, type="C-classification", kernel="linear",
+                   class.weights = wts)
+  
+  n_neg = sum(data_valid$test_result == 0)
+  n_pos = sum(data_valid$test_result == 1)
+  data_valid$weight = ifelse(data_valid$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  yhat = predict(svm_model, data_valid)
+  
+  TPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,])
+  FPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,])
+  ss3[i,] = c(TPR, FPR)
+  ac3[i] = sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+}
+
+ss3 = data.frame(ss3)
+colnames(ss3) = c("TPR", "FPR")
+ss3$color = as.factor(c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
+                        "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1"))
+
+# Neural Network
+ss4 = matrix(rep(0,2*7), ncol = 2)
+ac4 = rep(0,7)
+for(i in 1:length(w)){
+  n_neg = sum(data_train$test_result == 0)
+  n_pos = sum(data_train$test_result == 1)
+  
+  data_train$weight = ifelse(data_train$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  nn_model = nnet(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+                    ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+                    ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf, 
+                  data = data_train, weights = data_train$weight, size = 10)
+  
+  n_neg = sum(data_valid$test_result == 0)
+  n_pos = sum(data_valid$test_result == 1)
+  data_valid$weight = ifelse(data_valid$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  yhat = as.numeric(predict(nn_model, data_valid) > 0.5)
+  
+  TPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,])
+  FPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,])
+  ss4[i,] = c(TPR, FPR)
+  ac4[i] = sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+}
+
+ss4 = data.frame(ss4)
+colnames(ss4) = c("TPR", "FPR")
+ss4$color = as.factor(c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
+                        "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1"))
+
+# Random Forest
+ss5 = matrix(rep(0,2*7), ncol = 2)
+ac5 = rep(0,7)
+for(i in 1:length(w)){
+  n_neg = sum(data_train$test_result == 0)
+  n_pos = sum(data_train$test_result == 1)
+  
+  rf_fit = randomForest(factor(test_result) ~ ww_bf1_tf + ww_bf2_tf + ww_bf3_tf + ww_bf4_tf + ww_bf5_tf + 
+                          ww_3out5_tf + ww_2out5_tf + consec3 + ww_3out7_tf + ww_3out4_tf + 
+                          ww_1out5_tf + ww_1out3_tf + ww_1out4_tf + ww_2out7_tf, classwt = c(1,w[i]), data = data_train,
+                        ntree=1000)
+  n_neg = sum(data_valid$test_result == 0)
+  n_pos = sum(data_valid$test_result == 1)
+  data_valid$weight = ifelse(data_valid$test_result == 0, 1/n_neg, w[i]*1/n_pos)
+  yhat = as.numeric(as.character(predict(rf_fit, newdata = data_valid, type = "c")))
+  
+  TPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[1,])
+  FPR = weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,1]/
+    sum(weighted_confusion_matrix(data_valid$test_result, yhat, data_valid$weight)[2,])
+  ss5[i,] = c(TPR, FPR)
+  ac5[i] = sum(data_valid$weight*(yhat == data_valid$test_result))/sum(data_valid$weight)
+}
+ss5 = data.frame(ss5)
+colnames(ss5) = c("TPR", "FPR")
+ss5$color = as.factor(c("weight 0.2:1", "weight 0.5:1", "weight 1:1",
+                        "weight 1.5:1", "weight 2:1", "weight 3:1", "weight 4:1"))
+
+ss_tot = rbind(ss, ss1, ss2, ss3, ss4, ss5)
+ss_tot <- ss_tot %>% 
+  rename(shape = color) %>%
+  mutate(color = rep(c("classification tree", "logistic regression",
+                     "logistic regression (with LASSO)", "SVM", "Neural Network", "Random Forest"), each = 7))
